@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import threading
 from dataclasses import dataclass, field
@@ -139,10 +140,6 @@ class ComposeManager:
     def _do_launch(self, info: StackInfo) -> None:
         """Execute docker compose up in a subprocess."""
         try:
-            env_args = []
-            for key, value in info.env.items():
-                env_args.extend(["-e", f"{key}={value}"])
-
             cmd = [
                 "docker", "compose",
                 "-f", info.compose_file,
@@ -154,8 +151,6 @@ class ComposeManager:
             logger.info("Launching stack for %s: %s", info.agent_id, " ".join(cmd))
 
             # Build environment with agent-specific vars
-            import os
-
             run_env = os.environ.copy()
             run_env.update(info.env)
 
@@ -204,8 +199,6 @@ class ComposeManager:
             ]
 
             logger.info("Stopping stack for %s", info.agent_id)
-
-            import os
 
             run_env = os.environ.copy()
             run_env.update(info.env)

@@ -47,6 +47,12 @@ class OrchestratorServer:
         cmd = data.get("cmd")
 
         if cmd == "launch_stack":
+            if not data.get("agent_id") or not data.get("compose_file"):
+                await ws.send(json.dumps({
+                    "type": "error",
+                    "message": "launch_stack requires 'agent_id' and 'compose_file'",
+                }))
+                return
             info = self._manager.launch(
                 agent_id=data["agent_id"],
                 compose_file=data["compose_file"],
@@ -63,6 +69,12 @@ class OrchestratorServer:
             asyncio.create_task(self._poll_status(data["agent_id"]))
 
         elif cmd == "stop_stack":
+            if not data.get("agent_id"):
+                await ws.send(json.dumps({
+                    "type": "error",
+                    "message": "stop_stack requires 'agent_id'",
+                }))
+                return
             info = self._manager.stop(data["agent_id"])
             status = info.status.name if info else "UNKNOWN"
             await ws.send(
