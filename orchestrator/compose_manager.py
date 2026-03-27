@@ -201,7 +201,7 @@ class ComposeManager:
                 "-p", info.project_name,
                 "down",
                 "--remove-orphans",
-                "--timeout", "30",
+                "--timeout", "10",
             ]
 
             logger.info("Stopping stack for %s", info.agent_name)
@@ -214,7 +214,7 @@ class ComposeManager:
                 env=run_env,
                 capture_output=True,
                 text=True,
-                timeout=60,
+                timeout=30,
             )
 
             with self._lock:
@@ -230,6 +230,27 @@ class ComposeManager:
                         info.agent_name,
                         result.stderr[:200],
                     )
+        except subprocess.TimeoutExpired:
+            # Compose didn't finish in time — force-kill via docker compose kill
+            logger.warning("Stop timed out for %s, force-killing", info.agent_name)
+            try:
+                subprocess.run(
+                    ["docker", "compose", "-p", info.project_name, "kill"],
+                    capture_output=True, text=True, timeout=15,
+                )
+                subprocess.run(
+                    ["docker", "compose", "-p", info.project_name, "down", "--remove-orphans", "--timeout", "0"],
+                    capture_output=True, text=True, timeout=15,
+                )
+                with self._lock:
+                    info.status = StackStatus.STOPPED
+                    info.error_message = ""
+                    logger.info("Force-stopped stack for %s", info.agent_name)
+            except Exception as kill_err:
+                with self._lock:
+                    info.status = StackStatus.ERROR
+                    info.error_message = f"Force-kill failed: {kill_err}"
+                logger.exception("Force-kill failed for %s", info.agent_name)
         except Exception as e:
             with self._lock:
                 info.status = StackStatus.ERROR
