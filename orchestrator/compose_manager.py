@@ -35,7 +35,7 @@ class StackInfo:
     def __post_init__(self) -> None:
         if not self.project_name:
             # Docker Compose project name — unique per agent
-            self.project_name = f"sim_agent_{self.agent_id}"
+            self.project_name = f"sim_{self.agent_id}"
 
 
 class ComposeManager:
