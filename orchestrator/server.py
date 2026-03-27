@@ -47,45 +47,45 @@ class OrchestratorServer:
         cmd = data.get("cmd")
 
         if cmd == "launch_stack":
-            if not data.get("agent_id") or not data.get("compose_file"):
+            if not data.get("agent_name") or not data.get("compose_file"):
                 await ws.send(json.dumps({
                     "type": "error",
-                    "message": "launch_stack requires 'agent_id' and 'compose_file'",
+                    "message": "launch_stack requires 'agent_name' and 'compose_file'",
                 }))
                 return
             info = self._manager.launch(
-                agent_id=data["agent_id"],
+                agent_name=data["agent_name"],
                 compose_file=data["compose_file"],
                 env=data.get("env", {}),
             )
             await ws.send(
                 json.dumps({
                     "type": "stack_update",
-                    "agent_id": info.agent_id,
+                    "agent_name": info.agent_name,
                     "status": info.status.name,
                 })
             )
             # Poll until status settles, then send final update
-            asyncio.create_task(self._poll_status(data["agent_id"]))
+            asyncio.create_task(self._poll_status(data["agent_name"]))
 
         elif cmd == "stop_stack":
-            if not data.get("agent_id"):
+            if not data.get("agent_name"):
                 await ws.send(json.dumps({
                     "type": "error",
-                    "message": "stop_stack requires 'agent_id'",
+                    "message": "stop_stack requires 'agent_name'",
                 }))
                 return
-            info = self._manager.stop(data["agent_id"])
+            info = self._manager.stop(data["agent_name"])
             status = info.status.name if info else "UNKNOWN"
             await ws.send(
                 json.dumps({
                     "type": "stack_update",
-                    "agent_id": data["agent_id"],
+                    "agent_name": data["agent_name"],
                     "status": status,
                 })
             )
             if info:
-                asyncio.create_task(self._poll_status(data["agent_id"]))
+                asyncio.create_task(self._poll_status(data["agent_name"]))
 
         elif cmd == "get_stack_status":
             statuses = self._manager.get_all_status()
@@ -98,20 +98,20 @@ class OrchestratorServer:
                 json.dumps({"type": "error", "message": f"Unknown command: {cmd}"})
             )
 
-    async def _poll_status(self, agent_id: str, max_wait: float = 130.0) -> None:
+    async def _poll_status(self, agent_name: str, max_wait: float = 130.0) -> None:
         """Poll stack status until it settles, then broadcast the result."""
         import time
 
         start = time.monotonic()
         while time.monotonic() - start < max_wait:
             await asyncio.sleep(2.0)
-            info = self._manager.get_status(agent_id)
+            info = self._manager.get_status(agent_name)
             if info is None:
                 break
             if info.status.name in ("RUNNING", "STOPPED", "ERROR"):
                 msg = json.dumps({
                     "type": "stack_update",
-                    "agent_id": agent_id,
+                    "agent_name": agent_name,
                     "status": info.status.name,
                     "error": info.error_message,
                 })

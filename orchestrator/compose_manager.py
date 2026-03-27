@@ -25,7 +25,7 @@ class StackStatus(Enum):
 class StackInfo:
     """Tracks the state of a launched agent stack."""
 
-    agent_id: str
+    agent_name: str
     compose_file: str
     env: dict[str, str] = field(default_factory=dict)
     status: StackStatus = StackStatus.STOPPED
@@ -35,7 +35,7 @@ class StackInfo:
     def __post_init__(self) -> None:
         if not self.project_name:
             # Docker Compose project name — unique per agent
-            self.project_name = f"sim_{self.agent_id}"
+            self.project_name = f"sim_{self.agent_name}"
 
 
 class ComposeManager:
@@ -54,14 +54,14 @@ class ComposeManager:
 
     def launch(
         self,
-        agent_id: str,
+        agent_name: str,
         compose_file: str,
         env: dict[str, str] | None = None,
     ) -> StackInfo:
         """Launch a Docker Compose stack for an agent.
 
         Args:
-            agent_id: The agent this stack belongs to.
+            agent_name: The agent this stack belongs to.
             compose_file: Path to the docker-compose YAML file.
             env: Environment variables to pass to the stack.
 
@@ -69,21 +69,21 @@ class ComposeManager:
             StackInfo with current status.
         """
         with self._lock:
-            if agent_id in self._stacks:
-                existing = self._stacks[agent_id]
+            if agent_name in self._stacks:
+                existing = self._stacks[agent_name]
                 if existing.status in (StackStatus.RUNNING, StackStatus.STARTING):
                     logger.warning(
-                        "Stack for %s already %s", agent_id, existing.status.name
+                        "Stack for %s already %s", agent_name, existing.status.name
                     )
                     return existing
 
             info = StackInfo(
-                agent_id=agent_id,
+                agent_name=agent_name,
                 compose_file=compose_file,
                 env=env or {},
                 status=StackStatus.STARTING,
             )
-            self._stacks[agent_id] = info
+            self._stacks[agent_name] = info
 
         # Launch in background thread to avoid blocking
         thread = threading.Thread(
@@ -92,14 +92,20 @@ class ComposeManager:
         thread.start()
         return info
 
-    def stop(self, agent_id: str) -> StackInfo | None:
+    def stop(self, agent_name: str) -> StackInfo | None:
         """Stop and remove a running agent stack."""
         with self._lock:
-            info = self._stacks.get(agent_id)
+            info = self._stacks.get(agent_name)
             if info is None:
+                logger.warning("No stack info found for %s", agent_name)
                 return None
-            if info.status not in (StackStatus.RUNNING, StackStatus.STARTING):
+            if info.status == StackStatus.STOPPED:
+                logger.info("Stack for %s already stopped", agent_name)
                 return info
+            logger.info(
+                "Requesting stop for %s (current status: %s)",
+                agent_name, info.status.name,
+            )
             info.status = StackStatus.STOPPING
 
         thread = threading.Thread(
@@ -108,9 +114,9 @@ class ComposeManager:
         thread.start()
         return info
 
-    def get_status(self, agent_id: str) -> StackInfo | None:
+    def get_status(self, agent_name: str) -> StackInfo | None:
         with self._lock:
-            return self._stacks.get(agent_id)
+            return self._stacks.get(agent_name)
 
     def get_all_status(self) -> dict[str, dict[str, Any]]:
         """Return status of all known stacks as a serializable dict."""
@@ -148,7 +154,7 @@ class ComposeManager:
                 "--remove-orphans",
             ]
 
-            logger.info("Launching stack for %s: %s", info.agent_id, " ".join(cmd))
+            logger.info("Launching stack for %s: %s", info.agent_name, " ".join(cmd))
 
             # Build environment with agent-specific vars
             run_env = os.environ.copy()
@@ -165,26 +171,26 @@ class ComposeManager:
             if result.returncode == 0:
                 with self._lock:
                     info.status = StackStatus.RUNNING
-                logger.info("Stack for %s is running", info.agent_id)
+                logger.info("Stack for %s is running", info.agent_name)
             else:
                 with self._lock:
                     info.status = StackStatus.ERROR
                     info.error_message = result.stderr[:500]
                 logger.error(
                     "Failed to launch stack for %s: %s",
-                    info.agent_id,
+                    info.agent_name,
                     result.stderr[:200],
                 )
         except subprocess.TimeoutExpired:
             with self._lock:
                 info.status = StackStatus.ERROR
                 info.error_message = "Launch timed out after 120s"
-            logger.error("Stack launch timed out for %s", info.agent_id)
+            logger.error("Stack launch timed out for %s", info.agent_name)
         except Exception as e:
             with self._lock:
                 info.status = StackStatus.ERROR
                 info.error_message = str(e)
-            logger.exception("Error launching stack for %s", info.agent_id)
+            logger.exception("Error launching stack for %s", info.agent_name)
 
     def _do_stop(self, info: StackInfo) -> None:
         """Execute docker compose down in a subprocess."""
@@ -198,7 +204,7 @@ class ComposeManager:
                 "--timeout", "30",
             ]
 
-            logger.info("Stopping stack for %s", info.agent_id)
+            logger.info("Stopping stack for %s", info.agent_name)
 
             run_env = os.environ.copy()
             run_env.update(info.env)
@@ -215,17 +221,17 @@ class ComposeManager:
                 if result.returncode == 0:
                     info.status = StackStatus.STOPPED
                     info.error_message = ""
-                    logger.info("Stack for %s stopped", info.agent_id)
+                    logger.info("Stack for %s stopped", info.agent_name)
                 else:
                     info.status = StackStatus.ERROR
                     info.error_message = result.stderr[:500]
                     logger.error(
                         "Error stopping stack for %s: %s",
-                        info.agent_id,
+                        info.agent_name,
                         result.stderr[:200],
                     )
         except Exception as e:
             with self._lock:
                 info.status = StackStatus.ERROR
                 info.error_message = str(e)
-            logger.exception("Error stopping stack for %s", info.agent_id)
+            logger.exception("Error stopping stack for %s", info.agent_name)

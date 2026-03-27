@@ -4,7 +4,7 @@ Stack orchestrator for the CRUCIBLE SITL framework. Manages Docker Compose lifec
 
 ## Features
 - Launch/stop agent stacks from the browser
-- Injects agent-specific environment variables (AGENT_ID, ROS_DOMAIN_ID)
+- Injects agent-specific environment variables (AGENT_NAME, AGENT_NUM, ROS_DOMAIN_ID, etc.)
 - Monitors stack health and reports status in real time
 - Graceful shutdown of all stacks on exit
 
