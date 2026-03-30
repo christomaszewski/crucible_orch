@@ -229,6 +229,7 @@ class ComposeManager:
             ]
 
             logger.info("Launching stack for %s: %s", info.agent_name, " ".join(cmd))
+            logger.info("Stack env for %s: %s", info.agent_name, info.env)
 
             # Build environment with agent-specific vars
             run_env = os.environ.copy()
