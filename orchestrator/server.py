@@ -89,6 +89,20 @@ class OrchestratorServer:
             if info:
                 asyncio.create_task(self._poll_status(data["agent_name"]))
 
+        elif cmd == "stop_all_stacks":
+            statuses = self._manager.get_all_status()
+            stopped = []
+            for agent_name, status_info in statuses.items():
+                if status_info["status"] in ("RUNNING", "DEGRADED", "STARTING"):
+                    self._manager.stop(agent_name)
+                    stopped.append(agent_name)
+            # Poll each stopping stack
+            for agent_name in stopped:
+                asyncio.create_task(self._poll_status(agent_name))
+            await ws.send(
+                json.dumps({"type": "info", "message": f"Stopping {len(stopped)} stack(s)"})
+            )
+
         elif cmd == "get_stack_status":
             statuses = self._manager.get_all_status()
             await ws.send(
@@ -164,10 +178,9 @@ class OrchestratorServer:
             await asyncio.Future()
 
     def shutdown(self) -> None:
-        logger.info("Shutting down — stopping all stacks")
+        logger.info("Shutting down orchestrator (agent stacks left running)")
         if self._health_task:
             self._health_task.cancel()
-        self._manager.stop_all()
 
 
 def main() -> None:
