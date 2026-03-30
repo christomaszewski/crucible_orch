@@ -11,6 +11,8 @@ import json
 import logging
 import signal
 
+import os
+
 import websockets
 
 from orchestrator.compose_manager import ComposeManager, StackStatus
@@ -19,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 ORCH_PORT = 9091
 HEALTH_CHECK_INTERVAL = 10.0  # seconds between service health polls
+STACKS_CONTAINER_PATH = "/opt/stacks"
 
 
 class OrchestratorServer:
@@ -28,10 +31,17 @@ class OrchestratorServer:
         self._manager = ComposeManager()
         self._clients: set = set()
         self._health_task: asyncio.Task | None = None
+        self._stacks_host_path = os.environ.get("STACKS_HOST_PATH", "")
 
     async def handler(self, ws) -> None:
         self._clients.add(ws)
         logger.info("Orchestrator client connected")
+        # Send config on connect
+        await ws.send(json.dumps({
+            "type": "orch_config",
+            "stacks_host_path": self._stacks_host_path,
+            "stacks_container_path": STACKS_CONTAINER_PATH,
+        }))
         try:
             async for message in ws:
                 try:
