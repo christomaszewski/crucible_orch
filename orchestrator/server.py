@@ -13,11 +13,12 @@ import signal
 
 import websockets
 
-from orchestrator.compose_manager import ComposeManager
+from orchestrator.compose_manager import ComposeManager, StackStatus
 
 logger = logging.getLogger(__name__)
 
 ORCH_PORT = 9091
+HEALTH_CHECK_INTERVAL = 10.0  # seconds between service health polls
 
 
 class OrchestratorServer:
@@ -26,6 +27,7 @@ class OrchestratorServer:
     def __init__(self) -> None:
         self._manager = ComposeManager()
         self._clients: set = set()
+        self._health_task: asyncio.Task | None = None
 
     async def handler(self, ws) -> None:
         self._clients.add(ws)
@@ -108,27 +110,63 @@ class OrchestratorServer:
             info = self._manager.get_status(agent_name)
             if info is None:
                 break
-            if info.status.name in ("RUNNING", "STOPPED", "ERROR"):
-                msg = json.dumps({
-                    "type": "stack_update",
-                    "agent_name": agent_name,
-                    "status": info.status.name,
-                    "error": info.error_message,
-                })
-                for client in list(self._clients):
-                    try:
-                        await client.send(msg)
-                    except Exception:
-                        self._clients.discard(client)
+            if info.status.name in ("RUNNING", "STOPPED", "DEGRADED", "ERROR"):
+                await self._broadcast_update(info)
                 break
+
+    async def _broadcast_update(self, info) -> None:
+        """Send a stack_update to all connected clients."""
+        msg = json.dumps({
+            "type": "stack_update",
+            "agent_name": info.agent_name,
+            "status": info.status.name,
+            "error": info.error_message,
+            "services": dict(info.services),
+        })
+        for client in list(self._clients):
+            try:
+                await client.send(msg)
+            except Exception:
+                self._clients.discard(client)
+
+    async def _health_check_loop(self) -> None:
+        """Periodically check service health for all running/degraded stacks."""
+        while True:
+            await asyncio.sleep(HEALTH_CHECK_INTERVAL)
+            try:
+                statuses = self._manager.get_all_status()
+                for agent_name, status_info in statuses.items():
+                    if status_info["status"] not in ("RUNNING", "DEGRADED"):
+                        continue
+                    old_status = status_info["status"]
+                    old_services = dict(status_info.get("services", {}))
+
+                    # Run the check in a thread to avoid blocking the event loop
+                    services = await asyncio.to_thread(
+                        self._manager.check_services, agent_name
+                    )
+
+                    info = self._manager.get_status(agent_name)
+                    if info is None:
+                        continue
+
+                    # Broadcast if status or services changed
+                    new_services = dict(info.services)
+                    if info.status.name != old_status or new_services != old_services:
+                        await self._broadcast_update(info)
+            except Exception:
+                logger.debug("Health check iteration error", exc_info=True)
 
     async def run(self) -> None:
         logger.info("Stack orchestrator listening on port %d", ORCH_PORT)
+        self._health_task = asyncio.create_task(self._health_check_loop())
         async with websockets.serve(self.handler, "0.0.0.0", ORCH_PORT):
             await asyncio.Future()
 
     def shutdown(self) -> None:
         logger.info("Shutting down — stopping all stacks")
+        if self._health_task:
+            self._health_task.cancel()
         self._manager.stop_all()
 
 

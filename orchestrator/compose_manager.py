@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import subprocess
@@ -17,6 +18,7 @@ class StackStatus(Enum):
     STOPPED = auto()
     STARTING = auto()
     RUNNING = auto()
+    DEGRADED = auto()
     STOPPING = auto()
     ERROR = auto()
 
@@ -31,6 +33,7 @@ class StackInfo:
     status: StackStatus = StackStatus.STOPPED
     error_message: str = ""
     project_name: str = ""
+    services: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.project_name:
@@ -126,9 +129,78 @@ class ComposeManager:
                     "status": info.status.name,
                     "compose_file": info.compose_file,
                     "error": info.error_message,
+                    "services": dict(info.services),
                 }
                 for aid, info in self._stacks.items()
             }
+
+    def check_services(self, agent_name: str) -> dict[str, str] | None:
+        """Query container status for each service in a stack.
+
+        Returns a dict of {service_name: state} where state is one of:
+        running, exited, restarting, paused, dead, created, removing.
+        Returns None if the stack is not tracked.
+
+        Also updates the stack status to DEGRADED if some (but not all)
+        services are down, or ERROR/STOPPED if all are down.
+        """
+        with self._lock:
+            info = self._stacks.get(agent_name)
+            if info is None:
+                return None
+            if info.status not in (
+                StackStatus.RUNNING, StackStatus.DEGRADED
+            ):
+                return dict(info.services)
+
+        try:
+            result = subprocess.run(
+                [
+                    "docker", "compose",
+                    "-p", info.project_name,
+                    "ps", "--format", "json", "-a",
+                ],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode != 0:
+                return dict(info.services)
+
+            services: dict[str, str] = {}
+            for line in result.stdout.strip().splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                name = entry.get("Service", entry.get("Name", "unknown"))
+                state = entry.get("State", "unknown")
+                services[name] = state
+
+            if not services:
+                return dict(info.services)
+
+            with self._lock:
+                info.services = services
+                running_count = sum(
+                    1 for s in services.values() if s == "running"
+                )
+                total = len(services)
+                if running_count == total:
+                    if info.status == StackStatus.DEGRADED:
+                        info.status = StackStatus.RUNNING
+                elif running_count > 0:
+                    info.status = StackStatus.DEGRADED
+                else:
+                    # All services down
+                    info.status = StackStatus.ERROR
+                    info.error_message = "All services exited"
+
+            return services
+
+        except Exception as e:
+            logger.debug("Failed to check services for %s: %s", agent_name, e)
+            return dict(info.services)
 
     def stop_all(self) -> None:
         """Stop all running stacks. Used during shutdown."""
@@ -136,7 +208,9 @@ class ComposeManager:
             running = [
                 info
                 for info in self._stacks.values()
-                if info.status == StackStatus.RUNNING
+                if info.status in (
+                    StackStatus.RUNNING, StackStatus.DEGRADED,
+                )
             ]
         for info in running:
             self._do_stop(info)
@@ -172,6 +246,8 @@ class ComposeManager:
                 with self._lock:
                     info.status = StackStatus.RUNNING
                 logger.info("Stack for %s is running", info.agent_name)
+                # Initial service check
+                self.check_services(info.agent_name)
             else:
                 with self._lock:
                     info.status = StackStatus.ERROR
@@ -221,6 +297,7 @@ class ComposeManager:
                 if result.returncode == 0:
                     info.status = StackStatus.STOPPED
                     info.error_message = ""
+                    info.services = {}
                     logger.info("Stack for %s stopped", info.agent_name)
                 else:
                     info.status = StackStatus.ERROR
@@ -245,6 +322,7 @@ class ComposeManager:
                 with self._lock:
                     info.status = StackStatus.STOPPED
                     info.error_message = ""
+                    info.services = {}
                     logger.info("Force-stopped stack for %s", info.agent_name)
             except Exception as kill_err:
                 with self._lock:
