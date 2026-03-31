@@ -12,4 +12,13 @@ Stack orchestrator for the CRUCIBLE SITL framework. Manages Docker Compose lifec
 - Docker socket access (`/var/run/docker.sock`)
 - Docker Compose CLI (`docker compose`)
 
+## Testing
+
+```bash
+pip install pytest pytest-asyncio websockets
+python3 -m pytest tests/ -v
+```
+
+No ROS2 installation required. Tests use mocks for Docker/subprocess interactions.
+
 Part of the [CRUCIBLE](https://github.com/TODO/crucible) framework.
