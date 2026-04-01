@@ -1,4 +1,7 @@
-"""Docker Compose lifecycle manager for agent software stacks."""
+"""Container Compose lifecycle manager for agent software stacks.
+
+Supports Docker and Podman via the CONTAINER_RUNTIME environment variable.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +15,9 @@ from enum import Enum, auto
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# Container runtime binary — "docker" or "podman"
+CONTAINER_RUNTIME = os.environ.get("CONTAINER_RUNTIME", "docker")
 
 
 class StackStatus(Enum):
@@ -42,18 +48,20 @@ class StackInfo:
 
 
 class ComposeManager:
-    """Manages Docker Compose stacks for simulated agents.
+    """Manages container Compose stacks for simulated agents.
 
     Each agent can have an associated Compose file that defines its full
     software stack (estimator, autopilot, Zenoh bridge, etc.). This manager
     handles launching, stopping, and monitoring those stacks.
 
-    Requires the Docker socket to be mounted into the orchestrator container.
+    Supports Docker and Podman. Set CONTAINER_RUNTIME=podman to use Podman.
+    Requires the container socket to be mounted into the orchestrator container.
     """
 
     def __init__(self) -> None:
         self._stacks: dict[str, StackInfo] = {}
         self._lock = threading.Lock()
+        self._runtime = CONTAINER_RUNTIME
 
     def launch(
         self,
@@ -156,7 +164,7 @@ class ComposeManager:
         try:
             result = subprocess.run(
                 [
-                    "docker", "compose",
+                    self._runtime, "compose",
                     "-p", info.project_name,
                     "ps", "--format", "json", "-a",
                 ],
@@ -221,7 +229,7 @@ class ComposeManager:
         """Execute docker compose up in a subprocess."""
         try:
             cmd = [
-                "docker", "compose",
+                self._runtime, "compose",
                 "-f", info.compose_file,
                 "-p", info.project_name,
                 "up", "-d",
@@ -273,7 +281,7 @@ class ComposeManager:
         """Execute docker compose down in a subprocess."""
         try:
             cmd = [
-                "docker", "compose",
+                self._runtime, "compose",
                 "-f", info.compose_file,
                 "-p", info.project_name,
                 "down",
@@ -313,11 +321,11 @@ class ComposeManager:
             logger.warning("Stop timed out for %s, force-killing", info.agent_name)
             try:
                 subprocess.run(
-                    ["docker", "compose", "-p", info.project_name, "kill"],
+                    [self._runtime, "compose", "-p", info.project_name, "kill"],
                     capture_output=True, text=True, timeout=15,
                 )
                 subprocess.run(
-                    ["docker", "compose", "-p", info.project_name, "down", "--remove-orphans", "--timeout", "0"],
+                    [self._runtime, "compose", "-p", info.project_name, "down", "--remove-orphans", "--timeout", "0"],
                     capture_output=True, text=True, timeout=15,
                 )
                 with self._lock:

@@ -1,4 +1,4 @@
-"""Tests for orchestrator.compose_manager — Docker Compose lifecycle."""
+"""Tests for orchestrator.compose_manager — container Compose lifecycle."""
 
 import json
 from unittest.mock import MagicMock, patch
@@ -11,6 +11,63 @@ from orchestrator.compose_manager import ComposeManager, StackInfo, StackStatus
 @pytest.fixture
 def manager():
     return ComposeManager()
+
+
+class TestContainerRuntime:
+    def test_default_runtime_is_docker(self, manager):
+        assert manager._runtime == "docker"
+
+    def test_runtime_override(self):
+        mgr = ComposeManager()
+        mgr._runtime = "podman"
+        assert mgr._runtime == "podman"
+
+    @patch("orchestrator.compose_manager.subprocess.run")
+    def test_podman_used_in_launch(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        mgr = ComposeManager()
+        mgr._runtime = "podman"
+        info = StackInfo(
+            agent_name="uav_01",
+            compose_file="/opt/stacks/agent.yml",
+            status=StackStatus.STARTING,
+        )
+        mgr._stacks["uav_01"] = info
+        mgr._do_launch(info)
+        cmd = mock_run.call_args_list[0].args[0]
+        assert cmd[0] == "podman"
+        assert cmd[1] == "compose"
+
+    @patch("orchestrator.compose_manager.subprocess.run")
+    def test_podman_used_in_stop(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        mgr = ComposeManager()
+        mgr._runtime = "podman"
+        info = StackInfo(
+            agent_name="uav_01",
+            compose_file="/opt/stacks/agent.yml",
+            status=StackStatus.STOPPING,
+        )
+        mgr._stacks["uav_01"] = info
+        mgr._do_stop(info)
+        cmd = mock_run.call_args_list[0].args[0]
+        assert cmd[0] == "podman"
+
+    @patch("orchestrator.compose_manager.subprocess.run")
+    def test_podman_used_in_check_services(self, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout='{"Service":"gw","State":"running"}\n',
+        )
+        mgr = ComposeManager()
+        mgr._runtime = "podman"
+        info = StackInfo(
+            agent_name="uav_01", compose_file="x.yml", status=StackStatus.RUNNING,
+        )
+        mgr._stacks["uav_01"] = info
+        mgr.check_services("uav_01")
+        cmd = mock_run.call_args_list[0].args[0]
+        assert cmd[0] == "podman"
 
 
 class TestStackInfo:
